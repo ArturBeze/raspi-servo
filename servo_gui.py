@@ -1,72 +1,93 @@
 import tkinter as tk
-from pyfirmata2 import Arduino, util
+from tkinter import ttk
+import serial
+import serial.tools.list_ports
 import time
 
-# ----- Configuration -----
-PORT = '/dev/ttyACM0'  # Change if your Arduino uses another port
-SERVO_X_PIN = 9
-SERVO_Y_PIN = 10
-START_ANGLE = 90  # Start position in degrees
+def get_ports():
+    ports = serial.tools.list_ports.comports()
+    
+    if not ports:
+        print("No serial ports found.")
+        return
+        
+    for port in ports:
+            print(f"Device: {port.device}")
+            print(f"Description: {port.description}")
+            print(f"Hardware ID: {port.hwid}")
+            if port.manufacturer:
+                print(f"Manufacturer: {port.manufacturer}")
+            if port.product:
+                print(f"Product: {port.product}")
+            if port.serial_number:
+                print(f"Serial Number: {port.serial_number}")
+            print("-" * 30)
+            
+get_ports()
 
-# ----- Setup -----
-board = Arduino(PORT)
-time.sleep(2)  # Allow Firmata to initialize
+# --- Serial connection ---
+PORT = "/dev/ttyACM0"  # or "/dev/ttyUSB0"
+BAUD = 9600
 
-# Enable servo mode
-board.digital[SERVO_X_PIN].mode = 4  # SERVO
-board.digital[SERVO_Y_PIN].mode = 4  # SERVO
+try:
+    arduino = serial.Serial(PORT, BAUD, timeout=1)
+    time.sleep(2)  # wait for Arduino reset
+except serial.SerialException:
+    arduino = None
+    print("?? Could not open serial port. Check the connection and port name.")
 
-# Move both servos to start position
-board.digital[SERVO_X_PIN].write(START_ANGLE)
-board.digital[SERVO_Y_PIN].write(START_ANGLE)
+# --- Function to send data ---
+def send_to_arduino(x_val, y_val):
+    if arduino and arduino.is_open:
+        line = f"{x_val},{y_val}\n"
+        arduino.write(line.encode("utf-8"))
 
-# ----- GUI -----
+# --- GUI setup ---
 root = tk.Tk()
-root.title("Servo Control Panel")
-root.geometry("420x300")
-root.configure(bg="#f0f0f0")
+root.title("Servo Control GUI")
 
-tk.Label(root, text="Servo Motor Control", font=("Arial", 16, "bold"), bg="#f0f0f0").pack(pady=10)
+main = ttk.Frame(root, padding=20)
+main.pack()
 
-# ----- Functions -----
-def move_x(angle):
-    angle = int(float(angle))
-    board.digital[SERVO_X_PIN].write(angle)
-    label_x_val.config(text=f"{angle}")
+# --- Variables ---
+x_value = tk.IntVar()
+y_value = tk.IntVar()
 
-def move_y(angle):
-    angle = int(float(angle))
-    board.digital[SERVO_Y_PIN].write(angle)
-    label_y_val.config(text=f"{angle}")
+# --- Labels ---
+ttk.Label(main, text="X Axis").grid(row=0, column=0, pady=10, sticky="e")
+x_slider = ttk.Scale(main, from_=0, to=180, orient="horizontal", length=300, variable=x_value)
+x_slider.grid(row=0, column=1, padx=10)
+x_label = ttk.Label(main, text="90")
+x_label.grid(row=0, column=2, padx=10)
 
-# ----- X Axis -----
-frame_x = tk.Frame(root, bg="#f0f0f0")
-frame_x.pack(pady=10)
+ttk.Label(main, text="Y Axis").grid(row=1, column=0, pady=10, sticky="e")
+y_slider = ttk.Scale(main, from_=0, to=90, orient="horizontal", length=300, variable=y_value)
+y_slider.grid(row=1, column=1, padx=10)
+y_label = ttk.Label(main, text="90")
+y_label.grid(row=1, column=2, padx=10)
 
-tk.Label(frame_x, text="X Axis", font=("Arial", 12), bg="#f0f0f0").pack()
-x_slider = tk.Scale(frame_x, from_=0, to=180, orient="horizontal", length=300, command=move_x)
-x_slider.set(START_ANGLE)
-x_slider.pack()
+# --- Update servos and labels ---
+def update_servo(event=None):
+    x = int(x_slider.get())
+    y = int(y_slider.get())
+    x_label.config(text=f"{x}")
+    y_label.config(text=f"{y}")
+    send_to_arduino(x, y)
 
-label_x_val = tk.Label(frame_x, text=f"{START_ANGLE}", font=("Arial", 11, "bold"), bg="#f0f0f0", fg="#333")
-label_x_val.pack()
+# Bind movement and release
+for slider in (x_slider, y_slider):
+    slider.bind("<B1-Motion>", update_servo)
+    slider.bind("<ButtonRelease-1>", update_servo)
 
-# ----- Y Axis -----
-frame_y = tk.Frame(root, bg="#f0f0f0")
-frame_y.pack(pady=10)
+# --- Initialize both to 90 ---
+def init_position():
+    x_slider.set(90)
+    y_slider.set(45)
+    update_servo()
 
-tk.Label(frame_y, text="Y Axis", font=("Arial", 12), bg="#f0f0f0").pack()
-y_slider = tk.Scale(frame_y, from_=0, to=180, orient="horizontal", length=300, command=move_y)
-y_slider.set(START_ANGLE)
-y_slider.pack()
+root.after(1500, init_position)  # wait for Arduino to be ready
 
-label_y_val = tk.Label(frame_y, text=f"{START_ANGLE}", font=("Arial", 11, "bold"), bg="#f0f0f0", fg="#333")
-label_y_val.pack()
-
-# ----- Safe exit -----
-def on_close():
-    board.exit()
-    root.destroy()
-
-root.protocol("WM_DELETE_WINDOW", on_close)
 root.mainloop()
+
+if arduino:
+    arduino.close()

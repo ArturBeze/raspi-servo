@@ -24,7 +24,7 @@ def get_ports():
 def main():
     get_ports()
 
-    PORT = '/dev/ttyACM1'
+    PORT = '/dev/ttyACM0'
     BAUDRATE = 9600
 
     arduino = serial.Serial(PORT, BAUDRATE)
@@ -44,4 +44,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
