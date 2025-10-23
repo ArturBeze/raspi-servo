@@ -150,6 +150,7 @@ def main():
             RGB_image = getPreviewRGB(RGB_image, confidence_buf)
             BW_image = getPreviewBW(result_image, confidence_buf)
 
+            """
             # --- Object detection
             x, y, dist = get_nearest_object(depth_buf, confidence_buf)
             if x is not None:
@@ -162,6 +163,65 @@ def main():
                 dy = (y - height / 2) / (height / 2)
                 servo.move(dx * 5, dy * 5)
                 print(f"Tracking object at {dist:.1f} mm")
+            """
+
+            # --- Object detection: find nearest object cluster
+            mask = (confidence_buf > CONFIDENCE_THRESHOLD) & (depth_buf < OBJECT_DISTANCE_THRESHOLD)
+            
+            if np.any(mask):
+                # Focus on the closest range
+                min_dist = np.min(depth_buf[mask])
+                if not np.isfinite(min_dist):
+                    min_dist = OBJECT_DISTANCE_THRESHOLD
+            
+                # Keep only pixels close to min distance (±5 cm band)
+                band_mask = mask & (depth_buf < min_dist + 50)
+            
+                # Find connected components (object segmentation)
+                band_mask_uint8 = band_mask.astype(np.uint8)
+                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(band_mask_uint8, connectivity=8)
+            
+                if num_labels > 1:
+                    # Find the largest valid object (excluding background)
+                    largest_idx = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1
+                    cx, cy = centroids[largest_idx]
+                    dist = np.mean(depth_buf[labels == largest_idx])
+                    
+                    # Draw bounding box and centroid
+                    x, y, w, h, _ = stats[largest_idx]
+                    cv2.rectangle(RGB_image, (x, y), (x + w, y + h), (255, 255, 255), 2)
+                    cv2.circle(RGB_image, (int(cx), int(cy)), 5, (0, 0, 0), -1)
+            
+                    scanning = False
+                    last_seen = time.time()
+            
+                    # Move servos proportionally to center the object
+                    dx = (cx - width / 2) / (width / 2)
+                    dy = (cy - height / 2) / (height / 2)
+                    servo.move(dx * 5, dy * 5)
+                    print(f"Tracking object at {dist:.1f} mm | center=({cx:.1f},{cy:.1f})")
+                else:
+                    # No valid object found
+                    if not scanning and time.time() - last_seen > WAIT_AFTER_LOST:
+                        scanning = True
+                        print("Object lost. Resuming scan...")
+            else:
+                # No object in view
+                if not scanning and time.time() - last_seen > WAIT_AFTER_LOST:
+                    scanning = True
+                    print("Object lost. Resuming scan...")
+            
+                if scanning:
+                    # Sweep scanning pattern
+                    servo.x_angle += direction_x * 2
+                    if servo.x_angle >= X_MAX or servo.x_angle <= X_MIN:
+                        direction_x *= -1
+                        servo.y_angle += direction_y * 2
+                        if servo.y_angle >= Y_MAX or servo.y_angle <= Y_MIN:
+                            direction_y *= -1
+                    servo.send_angles(servo.x_angle, servo.y_angle)
+                    time.sleep(SCAN_DELAY)
+
 
             else:
                 # Lost tracking
