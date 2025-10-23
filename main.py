@@ -60,7 +60,7 @@ def getPreviewBW(preview: np.ndarray, confidence: np.ndarray) -> np.ndarray:
     preview[confidence < CONFIDENCE_THRESHOLD] = 0
     return preview
 
-
+"""
 def get_nearest_object(depth, confidence):
     mask = confidence > CONFIDENCE_THRESHOLD
     valid_depth = np.where(mask, depth, np.inf)
@@ -71,6 +71,41 @@ def get_nearest_object(depth, confidence):
         return None, None, None
     y, x = np.unravel_index(np.argmin(valid_depth), valid_depth.shape)
     return x, y, min_dist
+"""
+
+def get_nearest_object(depth, confidence):
+    """
+    Finds the nearest object region (confidence > threshold),
+    and returns its center (x, y) and mean distance.
+    """
+    mask = confidence > CONFIDENCE_THRESHOLD
+    valid_depth = np.where(mask, depth, np.inf)
+
+    # Ignore invalid
+    if not np.any(np.isfinite(valid_depth)):
+        return None, None, None
+
+    # Get minimum depth value (nearest object)
+    min_dist = np.min(valid_depth)
+    if min_dist > OBJECT_DISTANCE_THRESHOLD:
+        return None, None, None
+
+    # Segment region within ±5 cm of that depth
+    near_mask = (valid_depth < min_dist + 50) & (valid_depth > min_dist - 50)
+
+    # Find contours or centroid
+    near_mask_uint8 = np.uint8(near_mask)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(near_mask_uint8, connectivity=8)
+
+    if num_labels <= 1:
+        return None, None, None
+
+    # Find largest valid component (ignore background label 0)
+    largest_idx = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1
+    cx, cy = centroids[largest_idx]
+    region_depth = np.mean(valid_depth[labels == largest_idx])
+
+    return int(cx), int(cy), float(region_depth)
 
 
 # =============================
