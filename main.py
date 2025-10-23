@@ -7,14 +7,15 @@ import time
 # =============================
 # CONFIGURATION
 # =============================
-MAX_DISTANCE = 4000
-CONFIDENCE_THRESHOLD = 30
-OBJECT_DISTANCE_THRESHOLD = 500  # mm
-WAIT_AFTER_LOST = 3
-SCAN_DELAY = 0.05  # seconds
-PORT = "/dev/ttyACM0"
+MAX_DISTANCE = 4000              # ToF camera range (mm)
+CONFIDENCE_THRESHOLD = 30        # Minimum confidence
+OBJECT_DISTANCE_THRESHOLD = 500  # mm (50 cm)
+WAIT_AFTER_LOST = 3              # seconds
+SCAN_DELAY = 0.05                # seconds between scan steps
+PORT = "/dev/ttyACM0"            # Arduino serial port
 BAUDRATE = 9600
 
+# Servo limits
 X_MIN, X_MAX = 0, 180
 Y_MIN, Y_MAX = 0, 90
 
@@ -60,52 +61,30 @@ def getPreviewBW(preview: np.ndarray, confidence: np.ndarray) -> np.ndarray:
     preview[confidence < CONFIDENCE_THRESHOLD] = 0
     return preview
 
-"""
+
 def get_nearest_object(depth, confidence):
+    """Find centroid of the nearest valid object."""
     mask = confidence > CONFIDENCE_THRESHOLD
     valid_depth = np.where(mask, depth, np.inf)
     min_dist = np.min(valid_depth)
     if not np.isfinite(min_dist):
-        return None, None, None
+        return None, None, None, None
     if min_dist > OBJECT_DISTANCE_THRESHOLD:
-        return None, None, None
-    y, x = np.unravel_index(np.argmin(valid_depth), valid_depth.shape)
-    return x, y, min_dist
-"""
+        return None, None, None, None
 
-def get_nearest_object(depth, confidence):
-    """
-    Finds the nearest object region (confidence > threshold),
-    and returns its center (x, y) and mean distance.
-    """
-    mask = confidence > CONFIDENCE_THRESHOLD
-    valid_depth = np.where(mask, depth, np.inf)
+    # Segment region within ±5% of minimum distance
+    threshold = min_dist * 1.05
+    object_mask = (valid_depth <= threshold)
 
-    # Ignore invalid
-    if not np.any(np.isfinite(valid_depth)):
-        return None, None, None
+    ys, xs = np.nonzero(object_mask)
+    if len(xs) == 0:
+        return None, None, None, None
 
-    # Get minimum depth value (nearest object)
-    min_dist = np.min(valid_depth)
-    if min_dist > OBJECT_DISTANCE_THRESHOLD:
-        return None, None, None
-
-    # Segment region within ±5 cm of that depth
-    near_mask = (valid_depth < min_dist + 50) & (valid_depth > min_dist - 50)
-
-    # Find contours or centroid
-    near_mask_uint8 = np.uint8(near_mask)
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(near_mask_uint8, connectivity=8)
-
-    if num_labels <= 1:
-        return None, None, None
-
-    # Find largest valid component (ignore background label 0)
-    largest_idx = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1
-    cx, cy = centroids[largest_idx]
-    region_depth = np.mean(valid_depth[labels == largest_idx])
-
-    return int(cx), int(cy), float(region_depth)
+    # Centroid of segmented region
+    cx = int(np.mean(xs))
+    cy = int(np.mean(ys))
+    avg_dist = np.mean(valid_depth[object_mask])
+    return cx, cy, avg_dist, object_mask
 
 
 # =============================
@@ -144,84 +123,29 @@ def main():
             confidence_buf = frame.confidence_data
             height, width = depth_buf.shape
 
-            # --- Visualization
+            # Visualization
             result_image = (depth_buf * (255.0 / r)).astype(np.uint8)
             RGB_image = cv2.applyColorMap(result_image, cv2.COLORMAP_RAINBOW)
             RGB_image = getPreviewRGB(RGB_image, confidence_buf)
             BW_image = getPreviewBW(result_image, confidence_buf)
 
-            """
-            # --- Object detection
-            x, y, dist = get_nearest_object(depth_buf, confidence_buf)
-            if x is not None:
+            # Object detection
+            cx, cy, dist, mask = get_nearest_object(depth_buf, confidence_buf)
+            if cx is not None:
                 scanning = False
                 last_seen = time.time()
-                cv2.circle(RGB_image, (x, y), 10, (255, 255, 255), 2)
 
-                # Move servos proportionally to keep object centered
-                dx = (x - width / 2) / (width / 2)
-                dy = (y - height / 2) / (height / 2)
+                # Highlight object region & center
+                RGB_image[mask] = (0, 255, 255)
+                cv2.circle(RGB_image, (cx, cy), 10, (255, 255, 255), 2)
+
+                # Calculate normalized offset
+                dx = (cx - width / 2) / (width / 2)
+                dy = (cy - height / 2) / (height / 2)
+
+                # Move servos (proportional control)
                 servo.move(dx * 5, dy * 5)
                 print(f"Tracking object at {dist:.1f} mm")
-            """
-
-            # --- Object detection: find nearest object cluster
-            mask = (confidence_buf > CONFIDENCE_THRESHOLD) & (depth_buf < OBJECT_DISTANCE_THRESHOLD)
-            
-            if np.any(mask):
-                # Focus on the closest range
-                min_dist = np.min(depth_buf[mask])
-                if not np.isfinite(min_dist):
-                    min_dist = OBJECT_DISTANCE_THRESHOLD
-            
-                # Keep only pixels close to min distance (±5 cm band)
-                band_mask = mask & (depth_buf < min_dist + 50)
-            
-                # Find connected components (object segmentation)
-                band_mask_uint8 = band_mask.astype(np.uint8)
-                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(band_mask_uint8, connectivity=8)
-            
-                if num_labels > 1:
-                    # Find the largest valid object (excluding background)
-                    largest_idx = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1
-                    cx, cy = centroids[largest_idx]
-                    dist = np.mean(depth_buf[labels == largest_idx])
-                    
-                    # Draw bounding box and centroid
-                    x, y, w, h, _ = stats[largest_idx]
-                    cv2.rectangle(RGB_image, (x, y), (x + w, y + h), (255, 255, 255), 2)
-                    cv2.circle(RGB_image, (int(cx), int(cy)), 5, (0, 0, 0), -1)
-            
-                    scanning = False
-                    last_seen = time.time()
-            
-                    # Move servos proportionally to center the object
-                    dx = (cx - width / 2) / (width / 2)
-                    dy = (cy - height / 2) / (height / 2)
-                    servo.move(dx * 5, dy * 5)
-                    print(f"Tracking object at {dist:.1f} mm | center=({cx:.1f},{cy:.1f})")
-                else:
-                    # No valid object found
-                    if not scanning and time.time() - last_seen > WAIT_AFTER_LOST:
-                        scanning = True
-                        print("Object lost. Resuming scan...")
-            else:
-                # No object in view
-                if not scanning and time.time() - last_seen > WAIT_AFTER_LOST:
-                    scanning = True
-                    print("Object lost. Resuming scan...")
-            
-                if scanning:
-                    # Sweep scanning pattern
-                    servo.x_angle += direction_x * 2
-                    if servo.x_angle >= X_MAX or servo.x_angle <= X_MIN:
-                        direction_x *= -1
-                        servo.y_angle += direction_y * 2
-                        if servo.y_angle >= Y_MAX or servo.y_angle <= Y_MIN:
-                            direction_y *= -1
-                    servo.send_angles(servo.x_angle, servo.y_angle)
-                    time.sleep(SCAN_DELAY)
-
 
             else:
                 # Lost tracking
@@ -230,7 +154,6 @@ def main():
                     print("Object lost. Resuming scan...")
 
                 if scanning:
-                    # Sweep scanning pattern
                     servo.x_angle += direction_x * 2
                     if servo.x_angle >= X_MAX or servo.x_angle <= X_MIN:
                         direction_x *= -1
