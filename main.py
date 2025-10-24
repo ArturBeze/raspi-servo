@@ -1,167 +1,170 @@
+import tkinter as tk
+from tkinter import ttk
+import serial
+import serial.tools.list_ports
+import time
+import threading
 import cv2
 import numpy as np
 import ArducamDepthCamera as ac
-import serial
-import time
 
-# =========================
-# CONFIGURATION
-# =========================
+# ==========================
+# SERIAL / ARDUINO
+# ==========================
 PORT = "/dev/ttyACM0"
-BAUDRATE = 9600
+BAUD = 9600
 
-CONFIDENCE_THRESHOLD = 30
-OBJECT_DISTANCE_THRESHOLD = 500   # mm (50 cm)
-SCAN_DELAY = 0.05
-WAIT_AFTER_LOST = 3.0
+def get_ports():
+    ports = serial.tools.list_ports.comports()
+    if not ports:
+        print("No serial ports found.")
+        return
+    for port in ports:
+        print(f"Device: {port.device}")
+        print(f"Description: {port.description}")
+        print(f"Hardware ID: {port.hwid}")
+        print("-" * 30)
+
+get_ports()
+
+try:
+    arduino = serial.Serial(PORT, BAUD, timeout=1)
+    time.sleep(2)
+    print("✅ Connected to Arduino")
+except serial.SerialException:
+    arduino = None
+    print("⚠️ Could not open serial port. Check connection.")
+
+def send_to_arduino(x_val, y_val):
+    if arduino and arduino.is_open:
+        line = f"{x_val},{y_val}\n"
+        arduino.write(line.encode("utf-8"))
+
+# ==========================
+# CAMERA / ARDUCAM
+# ==========================
+
 MAX_DISTANCE = 4000
+confidence_value = 30
 
-X_MIN, X_MAX = 0, 180
-Y_MIN, Y_MAX = 0, 90
+def getPreviewRGB(preview: np.ndarray, confidence: np.ndarray) -> np.ndarray:
+    preview = np.nan_to_num(preview)
+    preview[confidence < confidence_value] = (0, 0, 0)
+    return preview
 
+def getPreviewBW(preview: np.ndarray, confidence: np.ndarray) -> np.ndarray:
+    preview = np.nan_to_num(preview)
+    preview[confidence < confidence_value] = 0
+    return preview
 
-# =========================
-# SERVO CONTROL
-# =========================
-class ServoController:
-    def __init__(self, port, baudrate):
-        self.arduino = serial.Serial(port, baudrate, timeout=1)
-        time.sleep(3)
-        self.x_angle = 90
-        self.y_angle = 45
-        self.send_angles()
+def on_confidence_changed(value):
+    global confidence_value
+    confidence_value = value
 
-    def send_angles(self):
-        cmd = f"{int(self.x_angle)},{int(self.y_angle)}\n"
-        self.arduino.write(cmd.encode("utf-8"))
-
-    def move_toward(self, dx, dy, scale=5.0):
-        """dx/dy in normalized screen units (-1..1)."""
-        self.x_angle = np.clip(self.x_angle + dx * scale, X_MIN, X_MAX)
-        self.y_angle = np.clip(self.y_angle + dy * scale, Y_MIN, Y_MAX)
-        self.send_angles()
-
-    def scan_step(self, dir_x, dir_y):
-        self.x_angle += dir_x * 2
-        if self.x_angle >= X_MAX or self.x_angle <= X_MIN:
-            dir_x *= -1
-            self.y_angle += dir_y * 2
-            if self.y_angle >= Y_MAX or self.y_angle <= Y_MIN:
-                dir_y *= -1
-        self.send_angles()
-        time.sleep(SCAN_DELAY)
-        return dir_x, dir_y
-
-    def close(self):
-        self.arduino.close()
-
-
-# =========================
-# CAMERA UTILITIES
-# =========================
-def filter_confidence(depth, confidence):
-    depth = np.nan_to_num(depth)
-    depth[confidence < CONFIDENCE_THRESHOLD] = np.inf
-    return depth
-
-
-def segment_closest_object(depth, confidence):
-    """Return (cx, cy, avg_distance, mask) of closest segmented region."""
-    depth = filter_confidence(depth, confidence)
-    min_dist = np.min(depth)
-    if not np.isfinite(min_dist) or min_dist > OBJECT_DISTANCE_THRESHOLD:
-        return None, None, None, None
-
-    # Segment pixels within ±5% of min distance
-    mask = (depth < min_dist * 1.05)
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return None, None, None, None
-
-    cx, cy = int(np.mean(xs)), int(np.mean(ys))
-    avg_dist = float(np.mean(depth[mask]))
-    return cx, cy, avg_dist, mask
-
-
-# =========================
-# MAIN LOOP
-# =========================
-def main():
-    print("Starting Arducam ToF Tracker...")
-
-    # --- Camera setup
+def camera_loop():
+    print("Starting Arducam Depth Camera...")
     cam = ac.ArducamCamera()
+
     ret = cam.open(ac.Connection.CSI, 0)
     if ret != 0:
-        print("Failed to open camera.")
+        print("❌ Failed to open camera. Error:", ret)
         return
 
-    cam.start(ac.FrameType.DEPTH)
+    ret = cam.start(ac.FrameType.DEPTH)
+    if ret != 0:
+        print("❌ Failed to start camera. Error:", ret)
+        cam.close()
+        return
+
     cam.setControl(ac.Control.RANGE, MAX_DISTANCE)
     r = cam.getControl(ac.Control.RANGE)
     info = cam.getCameraInfo()
-    width, height = info.width, info.height
+    print(f"Camera resolution: {info.width}x{info.height}")
 
-    # --- Servo setup
-    servo = ServoController(PORT, BAUDRATE)
-    dir_x, dir_y = 1, 1
-    scanning = True
-    last_seen = 0
+    cv2.namedWindow("rgb", cv2.WINDOW_AUTOSIZE)
+    if info.device_type == ac.DeviceType.VGA:
+        cv2.createTrackbar("confidence", "rgb", confidence_value, 255, on_confidence_changed)
 
-    cv2.namedWindow("Depth", cv2.WINDOW_AUTOSIZE)
+    while True:
+        frame = cam.requestFrame(2000)
+        if frame is not None and isinstance(frame, ac.DepthData):
+            depth_buf = frame.depth_data
+            confidence_buf = frame.confidence_data
+            amplitude_buf = frame.amplitude_data
 
-    try:
-        while True:
-            frame = cam.requestFrame(2000)
-            if frame is None or not isinstance(frame, ac.DepthData):
-                continue
+            result_image = (depth_buf * (255.0 / r)).astype(np.uint8)
+            RGB_image = cv2.applyColorMap(result_image, cv2.COLORMAP_RAINBOW)
+            RGB_image = getPreviewRGB(RGB_image, confidence_buf)
+            BW_image = getPreviewBW(result_image, confidence_buf)
 
-            depth = frame.depth_data
-            conf = frame.confidence_data
-            result_img = (depth * (255.0 / r)).astype(np.uint8)
-            RGB = cv2.applyColorMap(result_img, cv2.COLORMAP_RAINBOW)
+            cv2.normalize(confidence_buf, confidence_buf, 1, 0, cv2.NORM_MINMAX)
 
-            # --- Object segmentation
-            cx, cy, dist, mask = segment_closest_object(depth, conf)
+            cv2.imshow("preview_confidence", confidence_buf)
+            cv2.imshow("rgb", RGB_image)
+            cv2.imshow("bw", BW_image)
 
-            if cx is not None:
-                scanning = False
-                last_seen = time.time()
-
-                # Highlight segmented object
-                RGB[mask] = (0, 255, 255)
-                cv2.circle(RGB, (cx, cy), 8, (255, 255, 255), 2)
-
-                # Servo tracking (center the object)
-                dx = (cx - width / 2) / (width / 2)
-                dy = (cy - height / 2) / (height / 2)
-                servo.move_toward(dx, dy, scale=5.0)
-                print(f"Tracking object at {dist:.1f} mm")
-
-            else:
-                # No object visible
-                if not scanning and time.time() - last_seen > WAIT_AFTER_LOST:
-                    scanning = True
-                    print("Object lost → Scanning mode")
-
-                if scanning:
-                    dir_x, dir_y = servo.scan_step(dir_x, dir_y)
-
-            cv2.imshow("Depth", RGB)
             cam.releaseFrame(frame)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+        if cv2.waitKey(1) == ord("q"):
+            break
 
-    except KeyboardInterrupt:
-        print("Interrupted.")
+    cam.stop()
+    cam.close()
+    cv2.destroyAllWindows()
 
-    finally:
-        servo.close()
-        cam.stop()
-        cam.close()
-        cv2.destroyAllWindows()
+# ==========================
+# TKINTER GUI
+# ==========================
 
+root = tk.Tk()
+root.title("Servo Control + Depth Camera")
 
-if __name__ == "__main__":
-    main()
+main = ttk.Frame(root, padding=20)
+main.pack()
+
+x_value = tk.IntVar()
+y_value = tk.IntVar()
+
+ttk.Label(main, text="X Axis").grid(row=0, column=0, pady=10, sticky="e")
+x_slider = ttk.Scale(main, from_=0, to=180, orient="horizontal", length=300, variable=x_value)
+x_slider.grid(row=0, column=1, padx=10)
+x_label = ttk.Label(main, text="90")
+x_label.grid(row=0, column=2, padx=10)
+
+ttk.Label(main, text="Y Axis").grid(row=1, column=0, pady=10, sticky="e")
+y_slider = ttk.Scale(main, from_=0, to=135, orient="horizontal", length=300, variable=y_value)
+y_slider.grid(row=1, column=1, padx=10)
+y_label = ttk.Label(main, text="45")
+y_label.grid(row=1, column=2, padx=10)
+
+def update_servo(event=None):
+    x = int(x_slider.get())
+    y = int(y_slider.get())
+    x_label.config(text=f"{x}")
+    y_label.config(text=f"{y}")
+    send_to_arduino(x, y)
+
+for slider in (x_slider, y_slider):
+    slider.bind("<B1-Motion>", update_servo)
+    slider.bind("<ButtonRelease-1>", update_servo)
+
+def init_position():
+    x_slider.set(90)
+    y_slider.set(45)
+    update_servo()
+
+root.after(1500, init_position)
+
+# ==========================
+# START CAMERA IN THREAD
+# ==========================
+camera_thread = threading.Thread(target=camera_loop, daemon=True)
+camera_thread.start()
+
+# ==========================
+# RUN GUI
+# ==========================
+root.mainloop()
+
+if arduino:
+    arduino.close()
