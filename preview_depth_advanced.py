@@ -1,1 +1,1 @@
-RGB_image
+
