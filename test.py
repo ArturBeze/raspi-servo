@@ -36,9 +36,9 @@ def main():
         print(f"Sent: {command.strip()}")
 
     # Example usage
-    set_servos(90, 45)
+    set_servos(90, 0)
     time.sleep(1)
-    set_servos(0, 180)
+    set_servos(0, 45)
 
     arduino.close()
 

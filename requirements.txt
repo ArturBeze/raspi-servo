@@ -1,5 +1,6 @@
 ArducamDepthCamera
-opencv-python
+# opencv-python
+opencv-contrib-python
 numpy<2.0.0
 tk
 pyserial
