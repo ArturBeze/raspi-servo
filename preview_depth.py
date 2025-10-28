@@ -130,7 +130,7 @@ def main():
         if frame is not None and isinstance(frame, ac.DepthData):
             depth_buf = frame.depth_data # map of distances
             confidence_buf = frame.confidence_data # how reliable each depth measurement
-            #amplitude_buf = frame.amplitude_data # strength of the returned light signal
+            amplitude_buf = frame.amplitude_data # strength of the returned light signal
 
             result_image = (depth_buf * (255.0 / r)).astype(np.uint8)
 
@@ -146,8 +146,8 @@ def main():
             
             RGB_image = cv2.bilateralFilter(RGB_image, d=9, sigmaColor=50, sigmaSpace=9)
 
-            #cv2.imshow("result image", result_image)
-            #cv2.imshow("preview confidence", confidence_buf)
+            cv2.imshow("result image", result_image)
+            cv2.imshow("preview confidence", confidence_buf)
 
             cv2.rectangle(RGB_image, followRect.rect, white_color, 1)
             if not selectRect.empty:
