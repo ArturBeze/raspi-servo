@@ -1,0 +1,6 @@
+ArducamDepthCamera==0.1.21
+numpy==2.2.6
+opencv-contrib-python==4.12.0.88
+pillow==12.0.0
+pyserial==3.5
+tk==0.1.0
