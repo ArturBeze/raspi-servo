@@ -220,3 +220,32 @@ class ToFCamera:
         # Возвращаем координаты bounding box ближайшего объекта
         x, y, w, h = cv2.boundingRect(closest_contour)
         return (x, y, w, h), closest_contour
+
+    def visualize_closest_object(self):
+        frame = self.get_filtered_frame(normalize_depth=True)
+        if frame is None:
+            return None
+
+        depth_img = frame["depth"]
+        depth_img = 255 - self.denoise_gray_image(depth_img)
+        depth_img[depth_img < 128] = 0
+
+        if len(depth_img.shape) != 2 or depth_img.dtype != np.uint8:
+            raise ValueError("Изображение должно быть одноканальным 8-битным")
+
+        # Игнорируем черные пиксели (значение 0)
+        non_zero = depth_img[depth_img > 0]
+        if non_zero.size == 0:
+            return None  # нет объектов
+
+        result = self.find_closest_object()
+        if result:
+            (x, y, w, h), contour = result
+            print("Ближайший объект:", x, y, w, h)
+            output = cv2.cvtColor(depth_img, cv2.COLOR_GRAY2BGR)
+            cv2.rectangle(output, (x, y), (x+w, y+h), (0, 0, 255), 2)
+            return output
+        else:
+            print("Объекты не найдены")
+            return None
+

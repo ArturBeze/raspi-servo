@@ -216,16 +216,9 @@ def main():
             cv2.imshow("Confidence", confidence_vis)
             cv2.imshow("Amplitude", amplitude_vis)
             
-            result = cam.find_closest_object()
-            if result:
-                (x, y, w, h), contour = result
-                print("Ближайший объект:", x, y, w, h)
-                output = cv2.cvtColor(depth, cv2.COLOR_GRAY2BGR)
-                cv2.rectangle(output, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                cv2.imshow("Closest Object", output)
-            else:
-                print("Объекты не найдены")
-                cv2.destroyWindow("Closest Object")
+            result = cam.visualize_closest_object()
+            if result is not None:
+                cv2.imshow("Closest Object", result)
 
             # Управление с клавиатуры
             key = cv2.waitKey(1) & 0xFF
