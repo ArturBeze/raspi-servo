@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import ArducamDepthCamera as ac
 
@@ -148,3 +149,74 @@ class ToFCamera:
     def __del__(self):
         """Ensures safe closure when the object is destroyed."""
         self.close()
+
+    # ------------------- MYSELF -------------------
+
+    def denoise_gray_image(self, image):
+        # Проверяем, что изображение корректное
+        if image is None or len(image.shape) != 2 or image.dtype != np.uint8:
+            raise ValueError("Ожидается одноканальное 8-битное изображение (np.uint8)")
+
+        image[image == 0] = 255
+
+        # 1. Медианный фильтр — эффективно удаляет точечный шум
+        denoised = cv2.medianBlur(image, 5)
+
+        # 2. Билатеральный фильтр — сохраняет границы при сглаживании шумов
+        denoised = cv2.bilateralFilter(denoised, d=7, sigmaColor=75, sigmaSpace=75)
+
+        # 3. Морфологическая операция "открытие" — убирает мелкие пятна
+        kernel = np.ones((3, 3), np.uint8)
+        denoised = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
+
+        return denoised
+    
+    def find_closest_object(self, threshold_ratio=2.2):
+        """
+        Находит самый близкий объект на изображении глубины.
+        
+        depth_img: одноканальное 8-битное изображение глубины
+        threshold_ratio: верхний процент яркости для выделения объектов
+        """
+        frame = self.get_filtered_frame(normalize_depth=True)
+        if frame is None:
+            return None
+
+        depth_img = frame["depth"]
+        depth_img = 255 - self.denoise_gray_image(depth_img)
+        depth_img[depth_img < 128] = 0
+
+        if len(depth_img.shape) != 2 or depth_img.dtype != np.uint8:
+            raise ValueError("Изображение должно быть одноканальным 8-битным")
+
+        # Игнорируем черные пиксели (значение 0)
+        non_zero = depth_img[depth_img > 0]
+        if non_zero.size == 0:
+            return None  # нет объектов
+
+        # Определяем порог
+        max_val = non_zero.max()
+        min_val = non_zero.min()
+        threshold_val = max_val - int((max_val - min_val) * threshold_ratio)
+
+        _, binary = cv2.threshold(depth_img, threshold_val, 255, cv2.THRESH_BINARY)
+
+        # Находим контуры
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None  # объекты не найдены
+
+        # Находим контур с максимальной средней яркостью
+        max_mean = -1
+        closest_contour = None
+        for cnt in contours:
+            mask = np.zeros_like(depth_img)
+            cv2.drawContours(mask, [cnt], -1, 255, -1)
+            mean_val = cv2.mean(depth_img, mask=mask)[0]
+            if mean_val > max_mean:
+                max_mean = mean_val
+                closest_contour = cnt
+
+        # Возвращаем координаты bounding box ближайшего объекта
+        x, y, w, h = cv2.boundingRect(closest_contour)
+        return (x, y, w, h), closest_contour
