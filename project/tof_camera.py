@@ -152,12 +152,11 @@ class ToFCamera:
 
     # ------------------- MYSELF -------------------
 
-    def denoise_gray_image(self, depth):
+    @staticmethod
+    def denoise_gray_image(depth):
         # Проверяем, что изображение корректное
         if depth is None or len(depth.shape) != 2 or depth.dtype != np.uint8:
             raise ValueError("Ожидается одноканальное 8-битное изображение (np.uint8)")
-
-        depth[depth == 0] = 255
 
         # 1. Медианный фильтр — эффективно удаляет точечный шум
         denoised = cv2.medianBlur(depth, 5)
@@ -171,19 +170,9 @@ class ToFCamera:
 
         return denoised
     
-    def find_closest_object(self, threshold_ratio=2.2):
-        # Получаем отфильтрованные кадры
-        frame = self.get_filtered_frame(normalize_depth=True)
-        if frame is None:
-            return None
-
-        depth = frame["depth"].copy()
-        confidence = frame["confidence"].copy()
-        amplitude = frame["amplitude"].copy()
-
-        depth = 255 - self.denoise_gray_image(depth)
-        depth[depth < 128] = 0
-
+    @staticmethod
+    def find_closest_object(depth, threshold_ratio=0.8):
+        # Проверяем, что изображение корректное
         if len(depth.shape) != 2 or depth.dtype != np.uint8:
             raise ValueError("Изображение должно быть одноканальным 8-битным")
 
@@ -218,16 +207,3 @@ class ToFCamera:
         # Возвращаем координаты bounding box ближайшего объекта
         x, y, w, h = cv2.boundingRect(closest_contour)
         return depth, (x, y, w, h), closest_contour
-
-    def visualize_closest_object(self):
-        result = self.find_closest_object()
-        if result:
-            depth, (x, y, w, h), contour = result
-            print("Ближайший объект:", x, y, w, h)
-            output = cv2.cvtColor(depth, cv2.COLOR_GRAY2BGR)
-            cv2.rectangle(output, (x, y), (x+w, y+h), (0, 0, 255), 2)
-            return output
-        else:
-            print("Объекты не найдены")
-            return None
-
