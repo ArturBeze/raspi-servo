@@ -22,18 +22,18 @@ def show_camera_stream(save_dir="snapshots"):
     fps = 0
 
     while True:
-        frame = camera.get_frame(normalize_depth=True)
+        #frame = camera.get_frame(normalize_depth=True)
 
-        if frame is None:
-            return None
+        #if frame is None:
+        #    return None
 
-        depth = frame["depth"].copy()
+        #depth = frame["depth"].copy()
         depth_filtered = camera.get_filtered_depth(normalize_depth=True)
-        confidence = frame["confidence"].copy()
-        amplitude = frame["amplitude"].copy()
+        #confidence = frame["confidence"].copy()
+        #amplitude = frame["amplitude"].copy()
 
-        confidence_vis = cv2.normalize(confidence, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        amplitude_vis = cv2.normalize(amplitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        #confidence_vis = cv2.normalize(confidence, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        #amplitude_vis = cv2.normalize(amplitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
         current_time = time.time()
         delta = current_time - prev_time
@@ -41,13 +41,13 @@ def show_camera_stream(save_dir="snapshots"):
             fps = 1 / delta
         prev_time = current_time
 
-        depth_denoised = camera.denoise_gray_image(depth_filtered)
+        depth_denoised = camera.apply_denoise(depth_filtered)
 
         images = [
             #depth, 
             #confidence_vis, 
             #amplitude_vis, 
-            depth_filtered,
+            #depth_filtered,
             depth_denoised
         ]
 
@@ -55,15 +55,15 @@ def show_camera_stream(save_dir="snapshots"):
             #f"Depth. FPS: {fps:.1f}", 
             #f"Confidence" , 
             #f"Amplitude", 
-            f"Filtered",
-            f"Denoised"
+            #f"Filtered",
+            f"Denoised. FPS: {fps:.1f}"
         ]
 
         border_colors = [
             #(0, 0, 255),
             #(0, 255, 0),
             #(255, 0, 0),
-            (255, 255, 0),
+            #(255, 255, 0),
             (0, 255, 255)
         ]
 
