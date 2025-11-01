@@ -1,6 +1,11 @@
 import cv2
 import numpy as np
 
+def trim_image(image, min_val = 50, max_val = 150):
+    mask = cv2.inRange(image, min_val, max_val)
+    result = cv2.bitwise_and(image, image, mask=mask)
+    return result
+
 def combine_images(
     images,
     layout='horizontal',

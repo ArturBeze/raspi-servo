@@ -153,19 +153,19 @@ class ToFCamera:
     # ------------------- MYSELF -------------------
 
     @staticmethod
-    def denoise_gray_image(depth):
+    def apply_denoise(depth, median_ksize=5, bilateral_d=9, sigma_color=75, sigma_space=75, morph_ksize=3):
         # Проверяем, что изображение корректное
         if depth is None or len(depth.shape) != 2 or depth.dtype != np.uint8:
             raise ValueError("Ожидается одноканальное 8-битное изображение (np.uint8)")
 
         # 1. Медианный фильтр — эффективно удаляет точечный шум
-        denoised = cv2.medianBlur(depth, 5)
+        denoised = cv2.medianBlur(depth, median_ksize)
 
         # 2. Билатеральный фильтр — сохраняет границы при сглаживании шумов
-        denoised = cv2.bilateralFilter(denoised, d=7, sigmaColor=75, sigmaSpace=75)
+        denoised = cv2.bilateralFilter(denoised, bilateral_d, sigma_color, sigma_space)
 
         # 3. Морфологическая операция "открытие" — убирает мелкие пятна
-        kernel = np.ones((3, 3), np.uint8)
+        kernel = np.ones((morph_ksize, morph_ksize), np.uint8)
         denoised = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
 
         return denoised
@@ -206,4 +206,4 @@ class ToFCamera:
 
         # Возвращаем координаты bounding box ближайшего объекта
         x, y, w, h = cv2.boundingRect(closest_contour)
-        return depth, (x, y, w, h), closest_contour
+        return (x, y, w, h), closest_contour
